@@ -5,10 +5,8 @@ microfono (I2S(0, ...) en audio_i2s.py), asi grabar y reproducir no chocan
 entre si.
 
 Reproduce archivos .wav mono de 16 bits -- el mismo formato que genera
-grabar_wav.py. Para grabar la frase de confirmacion en tu propia voz:
-
-    >>> import grabar_wav
-    >>> grabar_wav.grabar(config.RUTA_CLIP_CONFIRMACION, segundos=2)
+grabar_wav.py (en la PC). La frase de confirmacion se graba en la PC:
+ver el README, seccion 4.
 
 Nota: aunque el archivo es de 16 bits, el I2S se abre en modo TX con
 bits=32 -- probado en placa: con bits=16 el MAX98357A no emitia sonido
@@ -19,6 +17,7 @@ si funciona.
 
 import array
 import struct
+import time
 from machine import I2S, Pin
 
 import config
@@ -83,11 +82,13 @@ def _leer_cabecera_wav(f):
     return sample_rate, tam_datos
 
 
-def reproducir(nombre_archivo, i2s=None):
+def reproducir(nombre_archivo, i2s=None, alimentar=None):
     """Reproduce un .wav mono de 16 bits por el amplificador. Si no se
     pasa `i2s`, crea y libera uno propio; para reproducir varios clips
     seguidos sin el "clic" de reabrir el periferico cada vez, crealo una
-    vez con iniciar_i2s_salida() y pasalo."""
+    vez con iniciar_i2s_salida() y pasalo. Si se pasa `alimentar` (una
+    funcion sin argumentos, p. ej. el feed del WDT), se llama entre bloques
+    para que el watchdog no reinicie la placa durante un clip largo."""
     with open(nombre_archivo, "rb") as f:
         sample_rate, tam_datos = _leer_cabecera_wav(f)
         propio = i2s is None
@@ -109,6 +110,9 @@ def reproducir(nombre_archivo, i2s=None):
                 for j in range(n_muestras):
                     struct.pack_into("<i", salida, j * 4, muestras[j] << 16)
                 i2s.write(mv_salida[: n_muestras * 4])
+                time.sleep_ms(1)  # cede el procesador para que el resto del programa avance
+                if alimentar is not None:
+                    alimentar()
                 restante -= n_bytes
         finally:
             if propio:

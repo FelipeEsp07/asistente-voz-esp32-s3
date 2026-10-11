@@ -1,18 +1,24 @@
-"""Evalua y entrena el modelo que detecta "activar asistente".
+"""Evalua y entrena el modelo que clasifica lo que dice la persona.
+
+Clases (en este orden, igual que CLASES de preparar_dataset_pc.py):
+  0 otro, 1 activacion ("Hola PAN"), 2 fecha_hora ("fecha y hora").
 
 IMPORTANTE: corre en la PC (numpy), no en la ESP32-S3. Usa el mismo
 feature_extractor.py que la placa, asi las caracteristicas son identicas.
 
+Modelo: CNN 1D con salida softmax de varias clases, ensamble de miembros.
+Se exporta como modelo_pesos.py (TIPO = "cnn_multi") que lee inferencia.py.
+
 Uso:
-  1. Graba muestras con recolectar_datos.py y copia dataset.jsonl aqui:
-       mpremote connect COM3 cp :dataset.jsonl .
-  2. python entrenar_modelo.py            (compara modelos, ~2-4 min)
+  1. Copia dataset.jsonl a esta carpeta: mpremote connect COM3 cp :dataset.jsonl .
+  2. python entrenar_modelo.py            (compara configuraciones, unos minutos)
      python entrenar_modelo.py --rapido   (grilla chica, para probar)
 """
 
 import json
 import random
 import sys
+from collections import Counter
 
 import numpy as np
 
@@ -24,11 +30,14 @@ REPETICIONES_CV = 3
 VECES_AUMENTO = 6
 SEMILLA = 42
 T = config.PUNTOS_ENVOLVENTE
-DISTANCIAS = ("cerca", "media", "lejos")
+
+CLASES = ("otro", "activacion", "fecha_hora", "activar_motobomba", "activar_bombillo", "apagar_bombillo",
+          "apagar_motobomba", "activar_secador", "apagar_secador")
+K = len(CLASES)
+IDX_ACTIVACION = CLASES.index("activacion")
 
 NC = fe.NUM_CANALES            # canales: [amplitud dB][zcr ponderado]
 D = NC * T + 1                 # + duracion
-COL_TODAS = list(range(D))
 
 
 # --------------------------------------------------------------------------
@@ -60,19 +69,18 @@ def features(bloques):
     return fe.extraer([tuple(b) for b in bloques])
 
 
-def preparar_datos(datos):  # noqa: D103
+def preparar_datos(datos):
     X = np.array([features(d["bloques"]) for d in datos])
-    y = np.array([d["label"] for d in datos], dtype=float).reshape(-1, 1)
-    dist = np.array([d["distancia"] for d in datos])
-    return X, y, dist
+    y = np.array([d["label"] for d in datos], dtype=int)
+    return X, y
 
 
 def particiones(datos, k, semilla):
-    """K particiones estratificadas por (etiqueta, distancia)."""
+    """K particiones estratificadas por etiqueta."""
     rng = random.Random(semilla)
     grupos = {}
     for i, d in enumerate(datos):
-        grupos.setdefault((d["label"], d["distancia"]), []).append(i)
+        grupos.setdefault(d["label"], []).append(i)
     folds = [[] for _ in range(k)]
     for idxs in grupos.values():
         rng.shuffle(idxs)
@@ -83,7 +91,7 @@ def particiones(datos, k, semilla):
 
 def armar_folds(datos, X):
     """Precalcula, para cada repeticion y particion, el entrenamiento
-    aumentado y la validacion (sin aumentar). Se comparte entre modelos."""
+    aumentado y la validacion (sin aumentar). Se comparte entre configuraciones."""
     todos = []
     for rep in range(REPETICIONES_CV):
         folds = particiones(datos, K_FOLDS, SEMILLA + rep)
@@ -97,17 +105,19 @@ def armar_folds(datos, X):
                 for i in tr:
                     Xa.append(features(aumentar_bloques(datos[i]["bloques"], rng)))
                     ya.append(datos[i]["label"])
-            piezas.append((np.array(Xa), np.array(ya, dtype=float).reshape(-1, 1), val))
+            piezas.append((np.array(Xa), np.array(ya, dtype=int), val))
         todos.append(piezas)
     return todos
 
 
 # --------------------------------------------------------------------------
-# Modelos
+# Modelo
 # --------------------------------------------------------------------------
 
-def sigmoid(z):
-    return 1 / (1 + np.exp(-np.clip(z, -30, 30)))
+def softmax(z):
+    z = z - z.max(axis=1, keepdims=True)
+    e = np.exp(z)
+    return e / e.sum(axis=1, keepdims=True)
 
 
 class Adam:
@@ -126,50 +136,13 @@ class Adam:
             self.p[k] -= self.lr * mh / (np.sqrt(vh) + 1e-8)
 
 
-class MLP:
-    tipo = "mlp"
-
-    def __init__(self, ocultas, lam, epocas, lr=0.01, dropout=0.0, semilla=0, columnas=None):
-        self.H, self.lam, self.epocas, self.lr = ocultas, lam, epocas, lr
-        self.dropout, self.semilla = dropout, semilla
-        self.columnas = columnas or COL_TODAS
-
-    def fit(self, X, y):
-        X = X[:, self.columnas]
-        rng = np.random.default_rng(self.semilla)
-        self.mu, self.sd = X.mean(0), X.std(0)
-        self.sd[self.sd < 1e-6] = 1.0
-        Xn = (X - self.mu) / self.sd
-        n, d = Xn.shape
-        H = self.H
-        p = {"W1": rng.normal(0, (1 / d) ** 0.5, (d, H)), "b1": np.zeros(H),
-             "W2": rng.normal(0, (1 / H) ** 0.5, (H, 1)), "b2": np.zeros(1)}
-        opt = Adam(p, self.lr)
-        for _ in range(self.epocas):
-            a1 = np.tanh(Xn @ p["W1"] + p["b1"])
-            mask = (rng.random(a1.shape) > self.dropout) / (1 - self.dropout) if self.dropout else 1.0
-            ah = a1 * mask
-            a2 = sigmoid(ah @ p["W2"] + p["b2"])
-            dz2 = (a2 - y) / n
-            da1 = (dz2 @ p["W2"].T) * mask
-            dz1 = da1 * (1 - a1 ** 2)
-            opt.paso({"W2": ah.T @ dz2 + 2 * self.lam / n * p["W2"], "b2": dz2.sum(0),
-                      "W1": Xn.T @ dz1 + 2 * self.lam / n * p["W1"], "b1": dz1.sum(0)})
-        self.p = p
-        return self
-
-    def predict(self, X):
-        Xn = (X[:, self.columnas] - self.mu) / self.sd
-        return sigmoid(np.tanh(Xn @ self.p["W1"] + self.p["b1"]) @ self.p["W2"] + self.p["b2"])
-
-
 class CNN1D:
     """Conv1D (K=3) sobre la secuencia (T pasos x NC canales) -> max y media
-    global por filtro (+ duracion) -> capa lineal -> sigmoide."""
-    tipo = "cnn"
+    global por filtro (+ duracion) -> capa lineal -> softmax de K clases."""
 
-    def __init__(self, filtros, lam, epocas, lr=0.01, K=3, semilla=0):
-        self.F, self.lam, self.epocas, self.lr, self.K, self.semilla = filtros, lam, epocas, lr, K, semilla
+    def __init__(self, filtros, lam, epocas, lr=0.01, K_conv=3, semilla=0):
+        self.F, self.lam, self.epocas, self.lr = filtros, lam, epocas, lr
+        self.K_conv, self.semilla = K_conv, semilla
 
     @staticmethod
     def _separar(X):
@@ -177,8 +150,8 @@ class CNN1D:
         return S, X[:, NC * T]
 
     def _parches(self, S):
-        L = S.shape[1] - self.K + 1
-        return np.concatenate([S[:, k:k + L, :] for k in range(self.K)], axis=2)
+        L = S.shape[1] - self.K_conv + 1
+        return np.concatenate([S[:, k:k + L, :] for k in range(self.K_conv)], axis=2)
 
     def _forward(self, S, dur):
         Sn = (S - self.mu) / self.sd
@@ -188,7 +161,7 @@ class CNN1D:
         idx = A.argmax(axis=1)
         mx = np.take_along_axis(A, idx[:, None, :], axis=1)[:, 0, :]
         h = np.concatenate([mx, A.mean(axis=1), dn[:, None]], axis=1)
-        return P, A, idx, h, sigmoid(h @ self.p["Wd"] + self.p["bd"])
+        return P, A, idx, h, softmax(h @ self.p["Wd"] + self.p["bd"])
 
     def fit(self, X, y):
         S, dur = self._separar(X)
@@ -196,15 +169,16 @@ class CNN1D:
         self.mu, self.sd = S.mean((0, 1)), S.std((0, 1))
         self.sd[self.sd < 1e-6] = 1.0
         self.dmu, self.dsd = dur.mean(), max(dur.std(), 1e-6)
-        n, F, KC = S.shape[0], self.F, self.K * S.shape[2]
+        Y = np.eye(K)[y]
+        n, F, KC = S.shape[0], self.F, self.K_conv * S.shape[2]
         p = {"Wc": rng.normal(0, (1 / KC) ** 0.5, (KC, F)), "bc": np.zeros(F),
-             "Wd": rng.normal(0, (1 / (2 * F + 1)) ** 0.5, (2 * F + 1, 1)), "bd": np.zeros(1)}
+             "Wd": rng.normal(0, (1 / (2 * F + 1)) ** 0.5, (2 * F + 1, K)), "bd": np.zeros(K)}
         self.p = p
         opt = Adam(p, self.lr)
         for _ in range(self.epocas):
-            P, A, idx, h, a = self._forward(S, dur)
+            P, A, idx, h, pr = self._forward(S, dur)
             L = A.shape[1]
-            dz = (a - y) / n
+            dz = (pr - Y) / n                       # gradiente de entropia cruzada con softmax
             dh = dz @ p["Wd"].T
             dA = np.zeros_like(A)
             np.put_along_axis(dA, idx[:, None, :], dh[:, None, :F], axis=1)
@@ -216,6 +190,7 @@ class CNN1D:
         return self
 
     def predict(self, X):
+        """Probabilidades (n, K), una columna por clase de CLASES."""
         S, dur = self._separar(X)
         return self._forward(S, dur)[4]
 
@@ -242,46 +217,51 @@ class Ensamble:
 # Evaluacion
 # --------------------------------------------------------------------------
 
-def auc(y, p):
-    pos, neg = p[y == 1], p[y == 0]
+def auc(es_positivo, p):
+    pos, neg = p[es_positivo], p[~es_positivo]
     return (pos[:, None] > neg[None, :]).mean() + 0.5 * (pos[:, None] == neg[None, :]).mean()
 
 
-def metricas(y, p, dist):
-    y, p = y.ravel(), p.ravel()
-    pred = p >= 0.5
-    m = {"acc": (pred == (y == 1)).mean(), "auc": auc(y, p),
-         "tpr": pred[y == 1].mean(), "fpr": pred[y == 0].mean()}
-    for d in DISTANCIAS:
-        sel = (y == 1) & (dist == d)
-        m["tpr_" + d] = pred[sel].mean() if sel.any() else float("nan")
+def metricas(y, P):
+    """Metricas multiclase. La frase de activacion tambien se evalua como
+    problema binario (activacion contra el resto), que es lo que usa la placa."""
+    pred = P.argmax(axis=1)
+    m = {"acc": (pred == y).mean()}
+    for k, nombre in enumerate(CLASES):
+        sel = y == k
+        m["rec_" + nombre] = (pred[sel] == k).mean() if sel.any() else float("nan")
+    es_act = y == IDX_ACTIVACION
+    m["auc_act"] = auc(es_act, P[:, IDX_ACTIVACION])
+    m["tpr_act"] = (pred[es_act] == IDX_ACTIVACION).mean()
+    m["fpr_act"] = (pred[~es_act] == IDX_ACTIVACION).mean()
     return m
 
 
-def evaluar(fabrica, folds, y, dist):
+def evaluar(fabrica, folds, X, y):
     """fabrica(semilla) -> modelo. Devuelve (metricas promedio, std de acc, probs de la rep 0)."""
     por_rep, primera = [], None
     for r, piezas in enumerate(folds):
-        p = np.zeros(len(y))
+        P = np.zeros((len(y), K))
         for f, (Xa, ya, val) in enumerate(piezas):
             modelo = fabrica(SEMILLA + 10 * r + f).fit(Xa, ya)
-            p[val] = modelo.predict(XG[val]).ravel()
-        por_rep.append(metricas(y, p, dist))
+            P[val] = modelo.predict(X[val])
+        por_rep.append(metricas(y, P))
         if primera is None:
-            primera = p.copy()
-    prom = {k: float(np.mean([m[k] for m in por_rep])) for k in por_rep[0]}
+            primera = P.copy()
+    prom = {k: float(np.nanmean([m[k] for m in por_rep])) for k in por_rep[0]}
     return prom, float(np.std([m["acc"] for m in por_rep])), primera
 
 
 def fila(nombre, m, sd):
-    return ("  %-34s acc=%.3f (+-%.3f)  auc=%.3f  tpr=%.2f fpr=%.2f | tpr cerca/media/lejos: %.2f/%.2f/%.2f" % (
-        nombre, m["acc"], sd, m["auc"], m["tpr"], m["fpr"], m["tpr_cerca"], m["tpr_media"], m["tpr_lejos"]))
+    recalls = " ".join("%s=%.2f" % (c, m["rec_" + c]) for c in CLASES)
+    return "  %-30s acc=%.3f (+-%.3f) | %s | activacion: auc=%.3f tpr=%.2f fpr=%.2f" % (
+        nombre, m["acc"], sd, recalls, m["auc_act"], m["tpr_act"], m["fpr_act"])
 
 
-def tabla_umbrales(y, p):
-    """(umbral, TPR, FPR) con las probabilidades de validacion cruzada."""
-    y, p = y.ravel(), p.ravel()
-    return [(u, (p[y == 1] >= u).mean(), (p[y == 0] >= u).mean()) for u in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)]
+def tabla_umbrales(y, P):
+    """(umbral, TPR, FPR) de la clase activacion con probabilidades de validacion cruzada."""
+    es_act, pa = y == IDX_ACTIVACION, P[:, IDX_ACTIVACION]
+    return [(u, (pa[es_act] >= u).mean(), (pa[~es_act] >= u).mean()) for u in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)]
 
 
 def _lista(a):
@@ -291,83 +271,72 @@ def _lista(a):
 def exportar(ruta, modelo):
     """Escribe modelo_pesos.py (formato que lee inferencia.py en la placa)."""
     miembros = modelo.miembros if isinstance(modelo, Ensamble) else [modelo]
-    partes = []
-    for m in miembros:
-        if m.tipo == "mlp":
-            partes.append({"mu": _lista(m.mu), "sd": _lista(m.sd), "W1": _lista(m.p["W1"].T),
-                           "B1": _lista(m.p["b1"]), "W2": _lista(m.p["W2"].ravel()), "B2": float(m.p["b2"][0])})
-        else:
-            partes.append({"mu": _lista(m.mu), "sd": _lista(m.sd), "dmu": float(m.dmu), "dsd": float(m.dsd),
-                           "Wc": _lista(m.p["Wc"].T), "bc": _lista(m.p["bc"]),
-                           "Wd": _lista(m.p["Wd"].ravel()), "bd": float(m.p["bd"][0])})
+    partes = [{"mu": _lista(m.mu), "sd": _lista(m.sd), "dmu": float(m.dmu), "dsd": float(m.dsd),
+               "Wc": _lista(m.p["Wc"].T), "bc": _lista(m.p["bc"]),
+               "Wd": _lista(m.p["Wd"].T), "bd": _lista(m.p["bd"])} for m in miembros]
     contenido = (
-        '"""Modelo entrenado para detectar "activar asistente".\n'
+        '"""Modelo entrenado para clasificar lo que dice la persona.\n'
         'Generado por entrenar_modelo.py. No editar a mano.\n'
         '"""\n\n'
-        'TIPO = "%s"\nMIEMBROS = [\n' % miembros[0].tipo
-        + ",\n".join("    " + repr(m) for m in partes) + "\n]\n")
+        'TIPO = "cnn_multi"\n'
+        'CLASES = %r\n' % (CLASES,)
+        + 'MIEMBROS = [\n' + ",\n".join("    " + repr(m) for m in partes) + "\n]\n")
     with open(ruta, "w", encoding="utf-8") as f:
         f.write(contenido)
 
 
 def main():
-    global XG
     rapido = "--rapido" in sys.argv
     datos = cargar(config.RUTA_DATASET)
-    XG, y, dist = preparar_datos(datos)
-    print("Muestras: %d (%d frase, %d otra). Features por muestra: %d" % (
-        len(datos), int(y.sum()), int(len(y) - y.sum()), XG.shape[1]))
+    X, y = preparar_datos(datos)
+    conteo = Counter(y.tolist())
+    print("Muestras: %d. Features por muestra: %d" % (len(datos), X.shape[1]))
+    for k, nombre in enumerate(CLASES):
+        print("  %-14s %3d" % (nombre, conteo.get(k, 0)))
     print("Aumento x%d, validacion cruzada %d particiones x %d repeticiones.\n" % (
         VECES_AUMENTO + 1, K_FOLDS, REPETICIONES_CV))
 
-    folds = armar_folds(datos, XG)
+    folds = armar_folds(datos, X)
     res = {}
 
     def probar(nombre, fabrica):
-        m, sd, p = evaluar(fabrica, folds, y, dist)
+        m, sd, p = evaluar(fabrica, folds, X, y)
         res[nombre] = (m, sd, fabrica, p)
         print(fila(nombre, m, sd), flush=True)
 
     eps = (300,) if rapido else (150, 300, 600)
-    print("--- 1) MLP: grilla de hiperparametros ---")
-    for h in ((4, 8) if rapido else (4, 8, 16)):
-        for ep in eps:
-            probar("mlp h=%d ep=%d" % (h, ep), lambda s, h=h, ep=ep: MLP(h, 0.01, ep, semilla=s))
-
-    print("\n--- 2) CNN 1D: grilla de hiperparametros ---")
+    print("--- 1) CNN 1D multiclase: grilla de hiperparametros ---")
     for f in ((4,) if rapido else (4, 8)):
         for ep in eps:
             probar("cnn f=%d ep=%d" % (f, ep), lambda s, f=f, ep=ep: CNN1D(f, 0.01, ep, semilla=s))
 
-    mejor = lambda pref: max((k for k in res if k.startswith(pref)), key=lambda k: (res[k][0]["auc"], res[k][0]["acc"]))
-    bm, bc = mejor("mlp "), mejor("cnn ")
-    print("\nMejor MLP: %s | Mejor CNN: %s" % (bm, bc))
+    mejor = max(res, key=lambda k: (res[k][0]["acc"], res[k][0]["auc_act"]))
+    print("\nMejor configuracion individual: %s" % mejor)
 
-    print("\n--- 3) Ensambles (5 miembros con bootstrap) de los mejores ---")
-    probar("ensamble de " + bm, lambda s, f=res[bm][2]: Ensamble(f, 5, s))
-    probar("ensamble de " + bc, lambda s, f=res[bc][2]: Ensamble(f, 5, s))
+    print("\n--- 2) Ensamble (5 miembros con bootstrap) de la mejor ---")
+    probar("ensamble de " + mejor, lambda s, f=res[mejor][2]: Ensamble(f, 5, s))
 
-    ranking = sorted(res, key=lambda k: (-res[k][0]["auc"], -res[k][0]["acc"]))
-    print("\n--- Ranking final (por AUC, luego precision) ---")
+    ranking = sorted(res, key=lambda k: (-res[k][0]["acc"], -res[k][0]["auc_act"]))
+    print("\n--- Ranking final (por precision multiclase, luego AUC de activacion) ---")
     for k in ranking[:5]:
         print(fila(k, res[k][0], res[k][1]))
 
     ganador = ranking[0]
     print("\nGanador: %s" % ganador)
-    print("\nUmbral de decision (probabilidades de validacion cruzada del ganador):")
+    print("\nUmbral de activacion (probabilidades de validacion cruzada del ganador):")
     tabla = tabla_umbrales(y, res[ganador][3])
     for u, tpr, fpr in tabla:
         print("   umbral %.1f -> detecta %3.0f%% de las frases, %3.0f%% de falsos positivos" % (u, 100 * tpr, 100 * fpr))
     umbral = max(tabla, key=lambda t: t[1] - t[2])[0]  # maximiza TPR - FPR (Youden)
-    print("Umbral sugerido (maximiza aciertos - falsos positivos): %.1f  -> config.UMBRAL_CONFIANZA" % umbral)
+    print("Umbral sugerido: %.1f  -> config.UMBRAL_CONFIANZA" % umbral)
 
-    Xa, ya = [XG[i] for i in range(len(datos))], [d["label"] for d in datos]
+    Xa, ya = [X[i] for i in range(len(datos))], [d["label"] for d in datos]
     rng = np.random.default_rng(SEMILLA)
     for _ in range(VECES_AUMENTO):
         for d in datos:
             Xa.append(features(aumentar_bloques(d["bloques"], rng)))
             ya.append(d["label"])
-    final = res[ganador][2](SEMILLA).fit(np.array(Xa), np.array(ya, dtype=float).reshape(-1, 1))
+    final = res[ganador][2](SEMILLA).fit(np.array(Xa), np.array(ya, dtype=int))
     exportar("modelo_pesos.py", final)
     print("\nModelo final entrenado con las %d muestras (aumentadas) y exportado a modelo_pesos.py." % len(datos))
 

@@ -64,3 +64,14 @@ class DetectorVoz:
             return segmento
 
         return None
+
+    def cerrar(self):
+        """Devuelve la palabra en curso si la grabacion termina antes de un
+        silencio. Solo lo usa preparar_dataset_pc: en la placa el segmento
+        siempre cierra por silencio."""
+        if not self._en_voz:
+            return None
+        segmento = self._segmento
+        self._segmento = []
+        self._en_voz = False
+        return segmento if len(segmento) >= config.MIN_BLOQUES_PALABRA else None

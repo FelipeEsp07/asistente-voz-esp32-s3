@@ -62,12 +62,14 @@ USB nativo (GPIO19, 20) y JTAG (GPIO39-42).
 
 **En la placa** (MicroPython, sin librerías externas):
 `config.py`, `audio_i2s.py`, `vad.py`, `feature_extractor.py`, `inferencia.py`,
-`led.py`, `salida_audio.py`, `main.py`, `recolectar_datos.py`, `grabar_wav.py`,
+`led.py`, `salida_audio.py`, `asistente.py` (lógica del asistente), `main.py`
+(punto de entrada: solo importa `ejecutar`, no arranca nada al encender),
+`actuadores.py`, `comandos.py`, `recolectar_datos.py`,
 `diagnostico_vad.py`, `modelo_pesos.py` (generado, no editar a mano), `confirmacion1.wav`
 (o el nombre que tenga `config.RUTA_CLIP_CONFIRMACION`).
 
-**En la PC** (no se copian a la placa; usan numpy/matplotlib):
-`entrenar_modelo.py`, `generar_graficas.py`, `convertir_audio.py`.
+**En la PC** (no se copian a la placa; usan numpy, matplotlib, sounddevice y soundfile):
+`entrenar_modelo.py`, `generar_graficas.py`, `convertir_audio.py`, `grabar_wav.py` (graba tomas con el micrófono de la PC).
 
 ## Puesta en marcha
 
@@ -89,25 +91,26 @@ Según la tabla de arriba. Verifica la placa detectada antes de continuar:
 ### 3. Copiar los archivos de la placa
 
 ```
-python -m mpremote connect COM3 cp config.py audio_i2s.py vad.py feature_extractor.py inferencia.py led.py salida_audio.py main.py recolectar_datos.py grabar_wav.py diagnostico_vad.py :
+python -m mpremote connect COM3 cp config.py audio_i2s.py vad.py feature_extractor.py inferencia.py led.py salida_audio.py actuadores.py comandos.py asistente.py main.py recolectar_datos.py grabar_wav.py diagnostico_vad.py :
 ```
 
 ### 4. Grabar la frase de confirmación (con tu propia voz)
 
 Dos formas:
 
-- **Directo con el INMP441** (más simple, calidad más baja):
-  ```python
-  import grabar_wav
-  grabar_wav.grabar("confirmacion1.wav", segundos=2)
+- **Con el micrófono de la PC** (recomendado): `grabar_wav.py` guarda una toma mono de
+  16 bits a 16 kHz, el formato que necesita la placa. Graba la frase en
+  `grabaciones/confirmacion/` y copia la elegida como `confirmacion1.wav`:
   ```
-- **Con otro dispositivo** (celular/PC, mejor calidad — recomendado): graba un WAV
-  cualquiera y conviértelo al formato que necesita la placa (mono, PCM 16 bits;
-  requiere `ffmpeg` instalado):
+  python grabar_wav.py felipe confirmacion 3
+  copy grabaciones\confirmacion\felipe_confirmacion_01.wav confirmacion1.wav
+  ```
+  Luego cópialo a la placa: `python -m mpremote connect COM3 cp confirmacion1.wav :`
+- **Con otro dispositivo** (celular, mejor calidad): graba un WAV cualquiera y
+  conviértelo al formato que necesita la placa (mono, PCM 16 bits; requiere `ffmpeg`):
   ```
   python convertir_audio.py mi_grabacion.wav confirmacion1.wav
   ```
-  Luego cópialo a la placa: `python -m mpremote connect COM3 cp confirmacion1.wav :`
 
   > `salida_audio.py` tolera encabezados WAV con bloques extra (`LIST`, etc.) que
   > agregan algunas apps de grabación — no asume que el audio empieza en el byte 44.
@@ -137,6 +140,8 @@ decisión (detección vs. falsos positivos) para ajustar `config.UMBRAL_CONFIANZ
 
 ### 6. Ejecutar
 
+La placa no arranca el asistente al encenderse: queda en el REPL. Para iniciarlo:
+
 ```python
 import main
 main.ejecutar()
@@ -144,12 +149,18 @@ main.ejecutar()
 
 Consola esperada:
 ```
-Listo. Esperando 'activar asistente'...
+Listo. Esperando 'Hola PAN'...
 [DESCARTADO] sonido no coincide (confianza 0.12)
-[COMANDO RECONOCIDO] 'activar asistente' (confianza 0.83).
-Esperando 'activar asistente'...
+[COMANDO RECONOCIDO] 'Hola PAN' (confianza 0.94).
+Escuchando comando...
+[COMANDO] no entendido.
+Esperando 'Hola PAN'...
 ```
 (y tu voz respondiendo por el parlante en el momento del reconocimiento)
+
+> El modelo actual todavía fue entrenado con la frase vieja "activar asistente", así que
+> reconoce ese sonido aunque la consola diga `Hola PAN`. Hasta reentrenar con las
+> grabaciones de `GUIA_GRABACIONES.md`, usa la frase vieja para las pruebas.
 
 ### 7. (Opcional) Gráficas de evaluación
 
@@ -187,7 +198,7 @@ Las altas frecuencias (`hf`) no aportaron y no se usan, aunque se siguen guardan
 - Es un clasificador de una sola frase entrenado con la voz de un hablante y un
   entorno; no es reconocimiento de voz general. Más muestras (otras voces, otros
   ambientes, más frases parecidas como negativas) es la mejora con más impacto.
-- El bucle principal de `main.py` no tiene un `try/except` general: si algo
+- El bucle principal de `asistente.py` no tiene un `try/except` general: si algo
   inesperado falla (lectura I2S, inferencia), el proceso se detiene y hay que
   reiniciar manualmente. Decisión deliberada por ahora, para que los fallos sean
   visibles durante las pruebas en hardware.

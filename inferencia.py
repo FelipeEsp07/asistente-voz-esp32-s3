@@ -1,6 +1,9 @@
 """Inferencia en MicroPython puro del modelo exportado por entrenar_modelo.py
-(ensamble de CNN 1D o de MLP, promediando la probabilidad de cada miembro).
-Sin librerias externas.
+(ensamble de CNN 1D multiclase con salida softmax). Sin librerias externas.
+
+predecir_clases() devuelve la probabilidad de cada clase (en el orden de
+modelo.CLASES). predecir_probabilidad() devuelve solo la de la frase de
+activacion, que es lo que usa asistente.py.
 """
 
 import math
@@ -9,26 +12,10 @@ import config
 import feature_extractor
 
 
-def _sigmoid(z):
-    return 1 / (1 + math.exp(-z))
-
-
-def _predecir_mlp(x, mb):
-    entradas = [(x[i] - mb["mu"][i]) / mb["sd"][i] for i in range(len(x))]
-    z = mb["B2"]
-    for j in range(len(mb["B1"])):
-        s = mb["B1"][j]
-        fila = mb["W1"][j]
-        for i in range(len(entradas)):
-            s += fila[i] * entradas[i]
-        z += mb["W2"][j] * math.tanh(s)
-    return _sigmoid(z)
-
-
-def _predecir_cnn(x, mb):
-    """Conv1D sobre la secuencia (T pasos x C canales) -> maximo y media por
-    filtro (+ duracion) -> capa lineal. Mismo calculo que CNN1D en
-    entrenar_modelo.py."""
+def _logits_cnn(x, mb):
+    """Conv1D sobre la secuencia (T pasos x C canales) -> maximo y media
+    por filtro (+ duracion) -> capa lineal. Mismo calculo que CNN1D en
+    entrenar_modelo.py. Devuelve un logit por clase."""
     T = config.PUNTOS_ENVOLVENTE
     C = feature_extractor.NUM_CANALES
     F = len(mb["bc"])
@@ -54,24 +41,36 @@ def _predecir_cnn(x, mb):
             sumas[f] += a
 
     h = maximos + [v / L for v in sumas] + [(x[C * T] - mb["dmu"]) / mb["dsd"]]
-    z = mb["bd"]
-    for i in range(len(h)):
-        z += mb["Wd"][i] * h[i]
-    return _sigmoid(z)
+    logits = []
+    for k in range(len(mb["bd"])):
+        z = mb["bd"][k]
+        fila = mb["Wd"][k]
+        for i in range(len(h)):
+            z += fila[i] * h[i]
+        logits.append(z)
+    return logits
+
+
+def _softmax(logits):
+    m = max(logits)
+    exps = [math.exp(z - m) for z in logits]
+    total = sum(exps)
+    return [e / total for e in exps]
+
+
+def predecir_clases(x, m):
+    """x: vector de caracteristicas (feature_extractor.extraer). m: el modulo
+    modelo_pesos ya importado (TIPO, CLASES y MIEMBROS). Devuelve la
+    probabilidad promedio de cada clase, en el orden de m.CLASES."""
+    if m.TIPO != "cnn_multi":
+        raise ValueError("Tipo de modelo desconocido: {}".format(m.TIPO))
+    total = [0.0] * len(m.CLASES)
+    for miembro in m.MIEMBROS:
+        for k, p in enumerate(_softmax(_logits_cnn(x, miembro))):
+            total[k] += p
+    return [t / len(m.MIEMBROS) for t in total]
 
 
 def predecir_probabilidad(x, m):
-    """x: vector de caracteristicas (feature_extractor.extraer). m: el modulo
-    modelo_pesos ya importado (TIPO y MIEMBROS). Devuelve la probabilidad
-    promedio de que sea la frase de activacion."""
-    if m.TIPO == "cnn":
-        predecir = _predecir_cnn
-    elif m.TIPO == "mlp":
-        predecir = _predecir_mlp
-    else:
-        raise ValueError("Tipo de modelo desconocido: {}".format(m.TIPO))
-
-    total = 0.0
-    for miembro in m.MIEMBROS:
-        total += predecir(x, miembro)
-    return total / len(m.MIEMBROS)
+    """Probabilidad promedio de que sea la frase de activacion."""
+    return predecir_clases(x, m)[m.CLASES.index("activacion")]

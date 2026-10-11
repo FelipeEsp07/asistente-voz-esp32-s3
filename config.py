@@ -1,5 +1,8 @@
 # Configuracion de hardware y de deteccion. Ajustar SOLO estos valores.
 
+# --- Frase de activacion del asistente ---
+PALABRA_ACTIVACION = "activar asistente"
+
 # --- Pines I2S hacia el INMP441 ---
 # Se evitan pines de strapping (0, 3, 45, 46) y USB/JTAG (19, 20, 39-42).
 PIN_SCK = 4   # BCLK del microfono
@@ -8,6 +11,29 @@ PIN_SD = 6    # Salida de datos del microfono (SD -> entrada del ESP32)
 
 # --- LED indicador de activacion ---
 PIN_LED = 7   # LED externo + resistencia (220-330 ohm) a GND
+
+# --- Actuadores (reles de 110 V; el ESP32 solo controla la señal de 3.3 V) ---
+# {nombre: (GPIO, segundos_maximos_encendido)}. El tiempo maximo apaga el equipo
+# aunque el programa falle. Valores provisionales: ajustar por equipo.
+ACTUADORES = {
+    "motobomba": (11, 900),  # IN1 del modulo de reles
+    "bombillo": (12, 900),   # IN2 del modulo de reles
+    "secador": (13, 900),    # IN3 del modulo de reles (pin provisional, confirmar cableado)
+}
+SEGUNDOS_VIGILANCIA = 5  # watchdog de hardware: reinicia la placa si el programa se congela
+
+# --- Comandos de voz: {etiqueta: (actuador, "on" o "off")} ---
+# Se dice la frase de activacion y luego el comando. Las etiquetas deben
+# coincidir con las clases del clasificador de comandos.
+COMANDOS = {
+    "activar_motobomba": ("motobomba", "on"),
+    "activar_bombillo": ("bombillo", "on"),
+    "apagar_bombillo": ("bombillo", "off"),
+    "apagar_motobomba": ("motobomba", "off"),
+    "activar_secador": ("secador", "on"),
+    "apagar_secador": ("secador", "off"),
+}
+SEGUNDOS_ESCUCHA = 10  # tiempo para decir la pregunta despues de la frase de activacion
 
 # --- Pines I2S hacia el amplificador MAX98357A (I2S(1, ...), separado del
 # microfono que usa I2S(0, ...)) ---
@@ -42,7 +68,8 @@ RECORTE_FRACCION_PICO = 0.05          # se descartan bloques iniciales/finales c
                                        # 0.05 rindio mejor que 0.10/0.15 en validacion cruzada
 
 # --- Modelo MLP ---
-UMBRAL_CONFIANZA = 0.7                # probabilidad minima para aceptar "activar asistente".
+UMBRAL_CONFIANZA = 0.5                # probabilidad minima para aceptar PALABRA_ACTIVACION.
+UMBRAL_PREGUNTA = 0.5                 # probabilidad minima para aceptar una pregunta de hora/fecha.
                                        # Validacion cruzada: 0.5 -> detecta 92% de las frases,
                                        # 16% falsos positivos; 0.7 -> 74% / 10%; 0.9 -> 52% / 2%.
 
