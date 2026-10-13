@@ -1,9 +1,18 @@
-"""Inferencia en MicroPython puro del modelo exportado por entrenar_modelo.py
-(ensamble de CNN 1D multiclase con salida softmax). Sin librerias externas.
+"""Inferencia en MicroPython puro del modelo exportado por entrenar_modelo.py.
+Sin librerias externas.
 
-predecir_clases() devuelve la probabilidad de cada clase (en el orden de
-modelo.CLASES). predecir_probabilidad() devuelve solo la de la frase de
-activacion, que es lo que usa asistente.py.
+El modelo es una cascada de grupos, cada uno un ensamble de CNN 1D con
+salida softmax, evaluados sobre el MISMO vector de caracteristicas:
+
+  - "activacion": "no" / "activacion" (estado ESPERA de asistente.py).
+  - "intencion": "otro" / "fecha_hora" / "comandos" (estado ESCUCHA; solo
+    tiene sentido si "activacion" dijo que si).
+  - "actuador": los 4 comandos de actuador (estado ESCUCHA_ACTUADOR; solo
+    tiene sentido si "intencion" dijo "comandos").
+  - "persona" / "genero": quien habla (usa ademas el tono, ver asistente.py).
+
+predecir_grupo(x, m, nombre) devuelve la probabilidad de cada clase de ese
+grupo, en el orden de m.MODELOS[nombre]["clases"].
 """
 
 import math
@@ -14,8 +23,9 @@ import feature_extractor
 
 def _logits_cnn(x, mb):
     """Conv1D sobre la secuencia (T pasos x C canales) -> maximo y media
-    por filtro (+ duracion) -> capa lineal. Mismo calculo que CNN1D en
-    entrenar_modelo.py. Devuelve un logit por clase."""
+    por filtro (+ valores extra: duracion, y tono si el grupo lo usa) ->
+    capa lineal. Mismo calculo que CNN1D en entrenar_modelo.py. Devuelve un
+    logit por clase."""
     T = config.PUNTOS_ENVOLVENTE
     C = feature_extractor.NUM_CANALES
     F = len(mb["bc"])
@@ -40,7 +50,9 @@ def _logits_cnn(x, mb):
                 maximos[f] = a
             sumas[f] += a
 
-    h = maximos + [v / L for v in sumas] + [(x[C * T] - mb["dmu"]) / mb["dsd"]]
+    n_extra = len(mb["emu"])
+    extras = [(x[C * T + j] - mb["emu"][j]) / mb["esd"][j] for j in range(n_extra)]
+    h = maximos + [v / L for v in sumas] + extras
     logits = []
     for k in range(len(mb["bd"])):
         z = mb["bd"][k]
@@ -58,19 +70,17 @@ def _softmax(logits):
     return [e / total for e in exps]
 
 
-def predecir_clases(x, m):
+def predecir_grupo(x, m, nombre):
     """x: vector de caracteristicas (feature_extractor.extraer). m: el modulo
-    modelo_pesos ya importado (TIPO, CLASES y MIEMBROS). Devuelve la
-    probabilidad promedio de cada clase, en el orden de m.CLASES."""
-    if m.TIPO != "cnn_multi":
+    modelo_pesos ya importado (TIPO y MODELOS). nombre: "intencion", "equipo"
+    o "verbo". Devuelve la probabilidad promedio de cada clase del grupo, en
+    el orden de m.MODELOS[nombre]["clases"]."""
+    if m.TIPO != "cnn_cascada":
         raise ValueError("Tipo de modelo desconocido: {}".format(m.TIPO))
-    total = [0.0] * len(m.CLASES)
-    for miembro in m.MIEMBROS:
+    grupo = m.MODELOS[nombre]
+    miembros = grupo["miembros"]
+    total = [0.0] * len(grupo["clases"])
+    for miembro in miembros:
         for k, p in enumerate(_softmax(_logits_cnn(x, miembro))):
             total[k] += p
-    return [t / len(m.MIEMBROS) for t in total]
-
-
-def predecir_probabilidad(x, m):
-    """Probabilidad promedio de que sea la frase de activacion."""
-    return predecir_clases(x, m)[m.CLASES.index("activacion")]
+    return [t / len(miembros) for t in total]

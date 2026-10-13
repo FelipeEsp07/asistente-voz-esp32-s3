@@ -70,7 +70,11 @@ def extraer(bloques):
         casi silenciosos el ruido de fondo no aporta informacion,
       - duracion del segmento recortado relativa a MAX_BLOQUES_PALABRA.
     Se usa igual en la ESP32-S3 y en la PC (entrenar_modelo.py). Elegido por
-    validacion cruzada entre ~15 variantes (ver entrenar_modelo.py)."""
+    validacion cruzada entre ~15 variantes (ver entrenar_modelo.py).
+
+    El centroide espectral (ver espectro.py) NO va aqui: corre una sola vez
+    por frase (no por bloque) y se agrega como "extra" junto al tono, solo
+    para persona/genero (ver entrenar_modelo.py / asistente.py)."""
     n = config.PUNTOS_ENVOLVENTE
     bloques = recortar(bloques)
 

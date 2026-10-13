@@ -1,16 +1,11 @@
 """Comandos de voz que encienden o apagan los actuadores.
 
-clasificar() esta pendiente: necesita un modelo entrenado con grabaciones de
-los comandos. Mientras tanto devuelve None y el asistente responde que no
-entendio, sin inventar acciones.
+ejecutar() recibe la etiqueta ya resuelta por el grupo "actuador" del modelo
+(ver entrenar_modelo.py/inferencia.py), por ejemplo "activar_bombillo": no
+clasifica nada aqui, solo aplica la accion.
 """
 
 import config
-
-
-def clasificar(caracteristicas):
-    """Etiqueta del comando dicho, o None si todavia no hay clasificador."""
-    return None
 
 
 def ejecutar(etiqueta, actuadores):

@@ -16,6 +16,7 @@ el umbral absoluto de config.UMBRAL_RUIDO_INICIAL.
 Uso (desde la carpeta del proyecto):
     python preparar_dataset_pc.py grabaciones_hola_pan --label 1 --hablante felipe
     python preparar_dataset_pc.py grabaciones_otras --label 0
+    python preparar_dataset_pc.py grabaciones_comandos --label 11  (palabra "comandos", ver CLASES)
 """
 
 import argparse
@@ -30,6 +31,8 @@ import numpy as np
 from scipy.signal import resample_poly
 
 import config
+import espectro
+import tono
 import vad
 
 ESCALA_ENERGIA = 2 ** 32  # misma escala que audio_i2s.LectorAudio.analizar
@@ -83,6 +86,9 @@ def analizar_bloque(bloque):
 
 
 def segmentos_de(x):
+    """Devuelve una lista de (carga_por_bloque, bloque_inicial, bloque_final_exclusivo)
+    por cada frase detectada. Los indices de bloque sirven para recortar el audio
+    crudo del segmento elegido (para el tono, que necesita la señal, no los bloques)."""
     B = config.BLOCK_SAMPLES
     bloques_x = [x[i:i + B] for i in range(0, len(x) - B + 1, B)]
     analisis = [analizar_bloque(b) for b in bloques_x]
@@ -92,14 +98,22 @@ def segmentos_de(x):
     detector = vad.DetectorVoz()
     detector.piso_ruido = piso
     segmentos = []
-    for energia, carga in analisis:
+    for idx, (energia, carga) in enumerate(analisis):
         seg = detector.procesar_bloque(energia, carga)
         if seg is not None:
-            segmentos.append(seg)
+            fin = idx + 1
+            segmentos.append((seg, fin - len(seg), fin))
     cola = detector.cerrar()  # la frase puede terminar al final del archivo, sin silencio posterior
     if cola is not None:
-        segmentos.append(cola)
+        fin = len(analisis)
+        segmentos.append((cola, fin - len(cola), fin))
     return segmentos
+
+
+def _hablante_de_archivo(nombre):
+    """'laura_hola_bender_01.wav' -> 'laura'. Todas las grabaciones del proyecto
+    nombran el archivo empezando por la persona que habla."""
+    return nombre.split("_", 1)[0]
 
 
 def procesar_archivo(ruta, etiqueta, hablante, distancia):
@@ -110,25 +124,34 @@ def procesar_archivo(ruta, etiqueta, hablante, distancia):
         return None
     if len(segmentos) > 1:
         print("  [AVISO] {}: {} segmentos, se usa el mas largo".format(os.path.basename(ruta), len(segmentos)))
-    segmento = max(segmentos, key=len)
+    segmento, ini, fin = max(segmentos, key=lambda s: len(s[0]))
+    B = config.BLOCK_SAMPLES
+    x_segmento = x[ini * B:fin * B]  # muestras crudas de la frase, no del archivo completo
+    f0 = tono.f0_mediana(x_segmento)
+    centroide = espectro.centroide_frase(x_segmento)
     return {
         "bloques": [list(b) for b in segmento],
         "label": etiqueta,
         "distancia": distancia,
-        "hablante": hablante,
+        "hablante": hablante or _hablante_de_archivo(os.path.basename(ruta)),
         "fuente": "pc",
         "archivo": os.path.basename(ruta),
+        "f0": round(float(f0), 1),
+        "centroide": round(float(centroide), 4),
     }
 
 
-# Clases del modelo (mismo orden que CLASES en entrenar_modelo.py).
+# Clases del modelo (mismo orden que FINE_CLASES en entrenar_modelo.py). "comandos"
+# (la palabra sola, para pasar al estado ESCUCHA_ACTUADOR) se agrego al final,
+# en el indice 11, para no reetiquetar las muestras ya guardadas en dataset.jsonl.
 CLASES = ("otro", "activacion", "fecha_hora", "activar_motobomba", "activar_bombillo", "apagar_bombillo",
-          "apagar_motobomba", "activar_secador", "apagar_secador")
+          "apagar_motobomba", "activar_secador", "apagar_secador", "activar_maquinilla", "apagar_maquinilla",
+          "comandos")
 # Etiqueta de cada frase de preguntas y comandos, a partir del nombre de archivo.
 ETIQUETA_PREGUNTA = {
     "fecha_y_hora": 2, "fecha": 2,  # "fecha y hora" y "que fecha es hoy" disparan la misma respuesta
     "activar_motobomba": 3, "activar_bombillo": 4, "apagar_bombillo": 5, "apagar_motobomba": 6,
-    "activar_secador": 7, "apagar_secador": 8,
+    "activar_secador": 7, "apagar_secador": 8, "activar_maquinilla": 9, "apagar_maquinilla": 10,
 }
 
 

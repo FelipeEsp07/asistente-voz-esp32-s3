@@ -70,18 +70,24 @@ def _grabar_toma(lector, segundos):
 def tomas(frase, cantidad, instruccion=None):
     """Graba `cantidad` tomas de `frase` con el microfono de la placa.
 
-    instruccion: texto que se muestra antes de cada toma. Por defecto dice la
-    frase; para ruido (sin hablar) conviene pasar un texto propio."""
+    instruccion: que se muestra antes de cada toma. Puede ser:
+    - None: dice la frase (por defecto).
+    - un texto: el mismo para todas las tomas (para ruido sin hablar, por ejemplo).
+    - una lista de textos: se muestra uno distinto en cada toma, en orden, y se
+      repite la lista si `cantidad` es mayor (util para negativos variados, por
+      ejemplo frases parecidas a la de activacion pero que no son la frase)."""
     i2s = audio_i2s.iniciar_i2s()
     lector = audio_i2s.LectorAudio(i2s, descartar_arranque=False)
     numero = _siguiente_numero(frase)
     hechas = 0
     if instruccion is None:
         instruccion = "di \"{}\"".format(frase.replace("_", " "))
+    lista = instruccion if isinstance(instruccion, list) else None
     print("Grabando '{}': {} tomas, {} s cada una".format(frase, cantidad, SEGUNDOS))
     try:
         while hechas < cantidad:
-            input("[{}/{}] pulsa Enter y {}".format(hechas + 1, cantidad, instruccion))
+            texto = lista[hechas % len(lista)] if lista else instruccion
+            input("[{}/{}] pulsa Enter y {}".format(hechas + 1, cantidad, texto))
             print("  grabando...")
             datos, pico = _grabar_toma(lector, SEGUNDOS)
             if pico >= PICO_SATURADO:

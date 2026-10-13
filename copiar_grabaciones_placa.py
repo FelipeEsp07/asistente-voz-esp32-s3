@@ -1,8 +1,8 @@
 """Copia a la PC las tomas grabadas con el microfono de la placa.
 
-En el REPL de la placa, graba cada toma con:
-    >>> import grabar_wav
-    >>> grabar_wav.grabar("fecha_01.wav", segundos=2)
+En el REPL de la placa, graba las tomas con grabar_placa.py:
+    >>> import grabar_placa
+    >>> grabar_placa.tomas("fecha", 30)
 
 Luego, desde la PC:
     python copiar_grabaciones_placa.py COM5 fecha felipe

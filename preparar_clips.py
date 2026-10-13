@@ -1,9 +1,9 @@
 """Recorta las palabras del vocabulario a la voz y las deja listas para la placa.
 
 Lee grabaciones/vocabulario_hora_fecha/<persona>_<palabra>.wav (2,5 s cada una,
-con silencio alrededor) y escribe clips/<palabra>.wav: solo la parte con voz,
-con 50 ms de margen, mono, 16 kHz, 16 bits. Asi la respuesta suena sin pausas
-largas y los clips ocupan poco espacio en la placa.
+con silencio alrededor) y escribe clips/<persona>_<palabra>.wav: solo la parte
+con voz, con 50 ms de margen, mono, 16 kHz, 16 bits. Asi la respuesta suena sin
+pausas largas y los clips ocupan poco espacio en la placa.
 
 Uso (desde la carpeta del proyecto):
     python preparar_clips.py felipe
@@ -59,7 +59,9 @@ def main():
         palabra = nombre[len(prefijo):-len(".wav")]
         x = pdp.leer_wav_mono_16k(os.path.join(CARPETA_ORIGEN, nombre))
         recorte = recortar(x).astype(np.int16)
-        ruta = os.path.join(CARPETA_SALIDA, palabra + ".wav")
+        # hora.py busca clips/<persona>_<palabra>.wav (ver secuencia()): sin el
+        # prefijo de persona, la respuesta de hora.py no encuentra el archivo.
+        ruta = os.path.join(CARPETA_SALIDA, args.persona + "_" + palabra + ".wav")
         sf.write(ruta, recorte, config.SAMPLE_RATE, subtype="PCM_16")
         total += os.path.getsize(ruta)
         print("  {:<18} {:.2f} s".format(palabra, len(recorte) / config.SAMPLE_RATE))

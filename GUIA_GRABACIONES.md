@@ -1,15 +1,25 @@
 # Guia de grabaciones
 
 Esta guia lista todo lo que hay que grabar para entrenar el asistente y responder
-con la voz de cada persona. Grabar **en la computadora**, no con el microfono del
-ESP32 (el INMP441 esta danado y no capta bien).
+con la voz de cada persona. Esta seccion usa el microfono de la PC por comodidad
+para grabar en serie; para el dataset de entrenamiento real conviene el microfono
+de la placa (ver la nota debajo: el INMP441 funciona bien cableado directo, sin
+la breakout Freenove).
+
+> Nota: para el dataset de entrenamiento real (el que usa `entrenar_modelo.py`
+> para el modelo que corre en la placa) se prefiere grabar con el microfono de
+> la placa (`grabar_placa.py` + `copiar_grabaciones_placa.py`, ver README), porque
+> el microfono de la PC suena distinto al INMP441 y el modelo no generalizaba
+> bien. Las instrucciones de esta guia (con `grabar_wav.py`, microfono de la PC)
+> siguen sirviendo para el vocabulario de fecha y hora, las preguntas y para
+> hacer pruebas rapidas.
 
 ## Como grabar
 
 Se graba con el microfono de la PC usando `grabar_wav.py`:
 
 ```
-python grabar_wav.py felipe hola_pan 10
+python grabar_wav.py felipe hola_bender 10
 python grabar_wav.py laura comando_activar_secador 5 --segundos 2.5
 ```
 
@@ -25,62 +35,58 @@ Resultado: `grabaciones/<grupo>/<persona>_<grupo>_<numero>.wav` (16 kHz, mono, 1
 - **Microfono**: el mismo para todas las personas, idealmente. Mantener la misma
   distancia durante una serie.
 - **Duracion**: 1 a 3 segundos por toma. Hablar en tono natural, sin gritar ni susurrar.
-- **Nombre de archivo**: lo asigna el programa. Ejemplo: `felipe_hola_pan_07.wav`,
+- **Nombre de archivo**: lo asigna el programa. Ejemplo: `felipe_hola_bender_07.wav`,
   `laura_comando_activar_secador_03.wav`.
-- **Carpeta**: una carpeta por grupo (`grabaciones/hola_pan/`, `grabaciones/comando_activar_secador/`, etc.).
+- **Carpeta**: una carpeta por grupo (`grabaciones/hola_bender/`, `grabaciones/comando_activar_secador/`, etc.).
 - **Variar**: en cada serie, cambiar un poco el volumen, la velocidad y la distancia.
 
-## 1. Frase de activacion: "Hola PAN"
+## 1. Frase de activacion: "Hola Bender"
 
-Cada una de las 4 personas (Felipe y 3 companeros):
+Cada una de las 4 personas (Felipe, Laura, Maicol y Cristian):
 
 | Que decir | Cuantas veces |
 |---|---|
-| "Hola PAN" | 30 (10 cerca, 10 a un metro, 10 a dos metros o con otro volumen) |
+| "Hola Bender" | 30 (10 cerca, 10 a un metro, 10 a dos metros o con otro volumen) |
 
-Ademas, cada persona dice **otras frases** que no son "Hola PAN" (son las negativas):
+Ademas, cada persona dice **otras frases** que no son "Hola Bender" (son las negativas):
 
 | Que decir | Cuantas veces |
 |---|---|
 | "Hola" (sola) | 5 |
 | "Hola, como estas" | 5 |
-| "PAN" (sola) | 5 |
-| "Activar asistente" (la frase vieja) | 5 |
+| "Bender" (sola) | 5 |
+| "Activar asistente" (frase parecida pero distinta, buen negativo) | 5 |
 | Cualquier frase de 2 o 3 palabras del mismo tipo | 10 |
 
-Total por persona: 30 de "Hola PAN" + 30 de otras frases = **60 tomas**.
+Total por persona: 30 de "Hola Bender" + 30 de otras frases = **60 tomas**.
 
 ## 2. Comandos para encender los actuadores
 
-Primero se dice la frase de activacion, luego el comando.
+Primero se dice la frase de activacion, luego el comando. Hoy solo se entrenan y
+reconocen por voz **bombillo** y **secador** (`motobomba` y `maquinilla` quedan
+**pausados**: no se graba ni se entrena con ellos por ahora).
 
 | Comando | Cuantas veces por persona |
 |---|---|
-| "Activar cautin" | 5 |
+| "Activar bombillo" | 5 |
 | "Activar secador" | 5 |
-| "Activar ventilador" | 5 |
-| "Activar [cuarto actuador]" | 5 *(pendiente: falta su nombre)* |
 
 ## 3. Comandos para apagar los actuadores
 
 | Comando | Cuantas veces por persona |
 |---|---|
-| "Apagar cautin" | 5 |
+| "Apagar bombillo" | 5 |
 | "Apagar secador" | 5 |
-| "Apagar ventilador" | 5 |
-| "Apagar [cuarto actuador]" | 5 *(pendiente)* |
 
-Total de comandos por persona: 8 comandos x 5 = **40 tomas** (48 cuando se confirme el cuarto actuador).
+Total de comandos por persona: 4 comandos x 5 = **20 tomas**.
 
 ## 4. Respuestas de confirmacion (en tu propia voz)
 
-Cada persona graba una sola vez estas frases. Son las que responde el asistente.
-
-| Frase | Cuando se usa |
-|---|---|
-| "Te escucho" (o "Si, dime") | Al reconocer "Hola PAN" |
-| "Listo" | Despues de ejecutar un comando |
-| "No entendi, repite" | Cuando no reconoce el comando (opcional por ahora) |
+Felipe y Laura graban una sola vez una frase corta de confirmacion (ej. "Listo"),
+que el asistente reproduce tanto al reconocer "Hola Bender" como despues de
+ejecutar un comando. Felipe aporta la voz de hombre (`confirmacion1.wav`) y
+Laura la voz de mujer (`confirmacion2.wav`); ver README, seccion "Puesta en
+marcha" paso 5.
 
 ## 5. Ruido y ambiente (sin persona)
 
@@ -122,10 +128,10 @@ en voz clara, separadas por medio segundo de silencio.
 
 | Grupo | Por persona | Total (4 personas) |
 |---|---|---|
-| "Hola PAN" | 30 | 120 |
+| "Hola Bender" | 30 | 120 |
 | Otras frases (negativas de persona) | 30 | 120 |
-| Comandos activar/apagar (8, o 10 con el cuarto actuador) | 40 (o 50) | 160 (o 200) |
-| Respuestas de confirmacion | 3 | 12 |
+| Comandos activar/apagar (bombillo y secador) | 20 | 80 |
+| Respuestas de confirmacion (solo Felipe y Laura) | 1 | 2 |
 | Vocabulario de hora y fecha | 70 | 280 |
 | Ruido y ambiente (sin persona, una sola vez) | 20 | 20 |
 
@@ -150,5 +156,9 @@ Las palabras de la respuesta que faltaban en la sección 6 se agregaron con
 
 ## Pendiente
 
-- Nombre del cuarto actuador (en la lista aparece como "[cuarto actuador]").
-- Nombre y genero de los tres companeros, para ajustar la respuesta de voces desconocidas.
+- Vocabulario completo de hora y fecha para Laura (le faltan 4 palabras:
+  `hoy_estamos_a`, `de_la_manana`, `de_la_tarde`, `de_la_noche` — ya se le pidio
+  grabarlas), y para Maicol y Cristian (todavia no tienen nada grabado).
+- Grabaciones de persona/genero para identificar a quien no es Felipe o Laura
+  (Maicol y Cristian) con el microfono de la placa, ademas de lo que ya cubre
+  la seccion 1 y 2/3 (ver nota al inicio de este documento).

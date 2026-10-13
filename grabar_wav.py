@@ -115,7 +115,15 @@ def _modo_vocabulario(args, persona):
     carpeta = os.path.join(args.carpeta, GRUPO_VOCABULARIO)
     os.makedirs(carpeta, exist_ok=True)
 
-    pendientes = [p for p in VOCABULARIO if not os.path.exists(os.path.join(carpeta, "{}_{}.wav".format(persona, p)))]
+    palabras_objetivo = VOCABULARIO
+    if args.palabras:
+        pedidas = set(args.palabras.split(","))
+        desconocidas = pedidas - set(VOCABULARIO)
+        if desconocidas:
+            raise SystemExit("palabra(s) desconocida(s): {}".format(", ".join(sorted(desconocidas))))
+        palabras_objetivo = [p for p in VOCABULARIO if p in pedidas]
+
+    pendientes = [p for p in palabras_objetivo if not os.path.exists(os.path.join(carpeta, "{}_{}.wav".format(persona, p)))]
     print("Vocabulario: {} palabras; faltan {} en {}/".format(len(VOCABULARIO), len(pendientes), carpeta))
     for indice, palabra in enumerate(pendientes, 1):
         texto = palabra.replace("_", " ")
@@ -163,6 +171,8 @@ def main():
     parser.add_argument("grupo", nargs="?", help="grupo de la guia, por ejemplo hola_pan")
     parser.add_argument("cantidad", nargs="?", type=int, help="tomas a grabar")
     parser.add_argument("--vocabulario", action="store_true", help="graba una toma por palabra de hora y fecha")
+    parser.add_argument("--palabras", default=None,
+                         help="con --vocabulario: solo estas palabras, separadas por comas (ej. hoy_estamos_a,de_la_tarde)")
     parser.add_argument("--preguntas", action="store_true", help="graba las frases de hora y fecha que dice la persona")
     parser.add_argument("--frase", default=None, help="con --preguntas: solo esta frase (ej. fecha_de_hoy)")
     parser.add_argument("--tomas", type=int, default=None, help="con --preguntas: tomas totales por frase (por defecto 15)")
